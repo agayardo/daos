@@ -633,7 +633,7 @@ mrone_obj_fetch(struct migrate_one *mrone, daos_handle_t oh, d_sg_list_t *sgls,
 	if (daos_oclass_grp_size(&mrone->mo_oca) > 1)
 		flags |= DIOF_TO_LEADER;
 
-	if (tls->mpt_opc == RB_OP_FAIL && daos_oclass_is_ec(&mrone->mo_oca) &&
+	if (tls->mpt_opc == RB_OP_EXTEND && daos_oclass_is_ec(&mrone->mo_oca) &&
 	    iods[0].iod_type != DAOS_IOD_SINGLE) {
 		unsigned int shard = mrone->mo_oid.id_shard %
 			     daos_oclass_grp_size(&mrone->mo_oca);
@@ -2291,7 +2291,7 @@ migrate_enum_unpack_cb(struct dss_enum_unpack_io *io, void *data)
 
 	shard = arg->arg->shard % obj_ec_tgt_nr(&arg->oc_attr);
 	if ((rc == 1 && is_ec_data_shard(io->ui_oid.id_shard, &arg->oc_attr)) ||
-	    (tls->mpt_opc == RB_OP_FAIL && io->ui_oid.id_shard == shard)) {
+	    (tls->mpt_opc == RB_OP_EXCLUDE && io->ui_oid.id_shard == shard)) {
 		D_DEBUG(DB_REBUILD, DF_UOID" ignore shard "DF_KEY"/%u.\n",
 			DP_UOID(io->ui_oid), DP_KEY(&io->ui_dkey), shard);
 		D_GOTO(put, rc = 0);

@@ -1,5 +1,5 @@
 /**
- * (C) Copyright 2016-2022 Intel Corporation.
+ * (C) Copyright 2016-2023 Intel Corporation.
  *
  * SPDX-License-Identifier: BSD-2-Clause-Patent
  */
@@ -180,7 +180,6 @@ rebuild_targets(test_arg_t **args, int args_cnt, d_rank_t *ranks,
 			args[i]->rebuild_post_cb(args[i]);
 	}
 }
-
 
 void
 rebuild_single_pool_rank(test_arg_t *arg, d_rank_t failed_rank, bool kill)
