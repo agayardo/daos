@@ -307,9 +307,9 @@ if [ -d "/mnt/daos" ]; then
 "
         done
         produce_output 1 "$fail_msg"
-        if ! ${IS_CI:-false}; then
-            exit 1
-        fi
+        # if ! ${IS_CI:-false}; then
+        exit 1
+        # fi
     fi
 else
     echo "/mnt/daos isn't present for unit tests"

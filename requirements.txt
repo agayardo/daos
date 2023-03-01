@@ -8,6 +8,7 @@ ninja
 pyelftools
 pyxattr
 pyyaml
-scons        # Works around a bug in scons on EL 8.
+# scons 4.5 not compatible with DAOS currently
+scons<4.5.0        # Works around a bug in scons on EL 8.
 tabulate
 wheel

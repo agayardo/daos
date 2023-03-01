@@ -16,6 +16,7 @@
 // To use a test branch (i.e. PR) until it lands to master
 // I.e. for testing library changes
 //@Library(value='pipeline-lib@your_branch') _
+@Library(value='pipeline-lib@jemalmbe/sre-1729a') _
 
 /* groovylint-disable-next-line CompileStatic */
 job_status_internal = [:]
@@ -38,7 +39,6 @@ void job_status_write() {
                   echo "${job_status_text}" >> ${dirName}jenkins_result"""
 }
 
-// groovylint-disable Instanceof
 // groovylint-disable-next-line MethodParameterTypeRequired
 void job_status_update(String name=env.STAGE_NAME,
                        // groovylint-disable-next-line NoDef
@@ -48,8 +48,8 @@ void job_status_update(String name=env.STAGE_NAME,
     if (job_status_internal.containsKey(key)) {
         // groovylint-disable-next-line VariableTypeRequired, NoDef
         def myStage = job_status_internal[key]
-        if (myStage instanceof Map) {
-            if (value instanceof Map) {
+        if (myStage in Map) {
+            if (value in Map) {
                 value.each { resultKey, data -> myStage[resultKey] = data }
                 return
             }
@@ -77,6 +77,27 @@ Map nlt_test() {
     Date startDate = new Date()
     sh label: 'Fault injection testing using NLT',
        script: './ci/docker_nlt.sh --class-name el8.fault-injection fi'
+    List filesList = []
+    filesList.addAll(findFiles(glob: '*.memcheck.xml'))
+    int vgfail = 0
+    int vgerr = 0
+    if (filesList) {
+        String rcs = sh label: 'Check for Valgrind errors',
+               script: "grep -E '<error( |>)' ${filesList.join(' ')} || true",
+               returnStdout: true
+        if (rcs) {
+            vfail = 1
+        }
+        String suite = sanitizedStageName()
+        junitSimpleReport suite: suite,
+                          file: suite + '_valgrind_results.xml',
+                          fails: vgfail,
+                          errors: vgerr,
+                          name: 'Valgrind_Memcheck',
+                          class: 'Valgrind',
+                          message: 'Valgrind Memcheck error detected',
+                          testdata: rcs
+    }
     int runTime = durationSeconds(startDate)
     Map runData = ['nlttest_time': runTime]
     return runData
@@ -814,6 +835,7 @@ pipeline {
                     }
                     steps {
                         job_step_update(
+                            // ignbore_failure=true for test
                             unitTest(timeout_time: 60,
                                      unstash_opt: true,
                                      ignore_failure: true,
@@ -1215,9 +1237,11 @@ pipeline {
     } // stages
     post {
         always {
+            println("Before ValgrindReportPublish: ${currentBuild.result}")
             valgrindReportPublish valgrind_stashes: ['el8-gcc-nlt-memcheck',
                                                      'el8-gcc-unit-memcheck',
                                                      'fault-inject-valgrind']
+            println("After ValgrindReportPublish: ${currentBuild.result}")
             job_status_update('final_status')
             job_status_write()
         }
