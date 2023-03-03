@@ -3,7 +3,7 @@
 %define agent_svc_name daos_agent.service
 %define sysctl_script_name 10-daos_server.conf
 
-%global mercury_version 2.2.0-6%{?dist}
+%global mercury_version 2.3.0~rc3-1%{?dist}
 %global libfabric_version 1.15.1-1
 %global __python %{__python3}
 
@@ -15,7 +15,7 @@
 
 Name:          daos
 Version:       2.3.103
-Release:       6%{?relval}%{?dist}
+Release:       7%{?relval}%{?dist}
 Summary:       DAOS Storage Engine
 
 License:       BSD-2-Clause-Patent
@@ -552,6 +552,9 @@ getent passwd daos_agent >/dev/null || useradd -s /sbin/nologin -r -g daos_agent
 # No files in a shim package
 
 %changelog
+* Fri Mar 10 2023 Jerome Soumagne <jerome.soumagne@intel.com> 2.3.103-7
+- Update to mercury 2.3.0rc3
+
 * Wed Feb 22 2023 Li Wei <wei.g.li@intel.com> 2.3.103-6
 - Update raft to 0.9.2-1.403.g3d20556
 
