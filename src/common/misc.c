@@ -685,7 +685,7 @@ daos_crt_init_opt_get(bool server, int ctx_nr)
 		goto out;
 	}
 
-	/* for psm2 provider, set a reasonable cio_ctx_max_num for cart */
+	/* set a reasonable cio_ctx_max_num for cart */
 	daos_crt_init_opt.cio_use_sep = 1;
 	if (!server) {
 		/* to workaround a bug in mercury/ofi, that the basic EP cannot

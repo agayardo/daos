@@ -42,8 +42,6 @@ from SCons.Script import WhereIs
 from SCons.Script import BUILD_TARGETS
 from SCons.Errors import InternalError
 
-OPTIONAL_COMPS = ['psm2']
-
 
 class DownloadFailure(Exception):
     """Exception raised when source can't be downloaded
