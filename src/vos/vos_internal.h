@@ -93,6 +93,11 @@ enum {
 	DTX_LID_ABORTED,
 	/** Reserved local ids */
 	DTX_LID_RESERVED,
+	/**
+	 * If the highest bit (31th) of the DTX entry offset is set, then it is for
+	 * solo (single modification against single replicated object) transaction.
+	 */
+	DTX_LID_SOLO_FLAG	= (1 << 31),
 };
 
 /*
@@ -284,6 +289,10 @@ struct vos_container {
 	uint64_t		vc_io_nospc_ts;
 	/* The (next) position for committed DTX entries reindex. */
 	umem_off_t		vc_cmt_dtx_reindex_pos;
+	/* The epoch for the latest committed solo DTX. Any solo
+	 * * transaction with older epoch must has been committed.
+	 */
+	daos_epoch_t		vc_solo_dtx_epoch;
 	/* Various flags */
 	unsigned int		vc_in_aggregation:1,
 				vc_in_discard:1,
@@ -328,11 +337,14 @@ struct vos_dtx_act_ent {
 	struct dtx_handle		*dae_dth;
 
 	unsigned int			 dae_committable:1,
+					 dae_committing:1,
 					 dae_committed:1,
+					 dae_aborting:1,
 					 dae_aborted:1,
 					 dae_maybe_shared:1,
 					 /* Need validation on leader before commit/committable. */
 					 dae_need_validation:1,
+					 dae_preparing:1,
 					 dae_prepared:1;
 };
 
@@ -1488,6 +1500,30 @@ struct csum_recalc_args {
 };
 
 int vos_csum_recalc_fn(void *recalc_args);
+
+static inline bool
+vos_dae_is_commit(struct vos_dtx_act_ent *dae)
+{
+	return dae->dae_committable || dae->dae_committing || dae->dae_committed;
+}
+
+static inline bool
+vos_dae_is_abort(struct vos_dtx_act_ent *dae)
+{
+	return dae->dae_aborting || dae->dae_aborted;
+}
+
+static inline bool
+vos_dae_is_prepare(struct vos_dtx_act_ent *dae)
+{
+	return dae->dae_preparing || dae->dae_prepared;
+}
+
+static inline bool
+vos_dae_in_process(struct vos_dtx_act_ent *dae)
+{
+	return dae->dae_committing || dae->dae_aborting || dae->dae_preparing;
+}
 
 static inline struct dcs_csum_info *
 vos_csum_at(struct dcs_iod_csums *iod_csums, unsigned int idx)

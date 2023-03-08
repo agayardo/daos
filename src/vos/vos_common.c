@@ -1,5 +1,5 @@
 /**
- * (C) Copyright 2016-2022 Intel Corporation.
+ * (C) Copyright 2016-2023 Intel Corporation.
  *
  * SPDX-License-Identifier: BSD-2-Clause-Patent
  */
@@ -257,6 +257,7 @@ vos_tx_end(struct vos_container *cont, struct dtx_handle *dth_in,
 	   bool started, int err)
 {
 	struct dtx_handle	*dth = dth_in;
+	struct vos_dtx_act_ent	*dae;
 	struct dtx_rsrvd_uint	*dru;
 	struct vos_dtx_cmt_ent	*dce = NULL;
 	struct dtx_handle	 tmp = {0};
@@ -303,19 +304,24 @@ vos_tx_end(struct vos_container *cont, struct dtx_handle *dth_in,
 	err = umem_tx_end(vos_cont2umm(cont), err);
 
 cancel:
+	if (dtx_is_valid_handle(dth_in)) {
+		dae = dth_in->dth_ent;
+		dae->dae_preparing = 0;
+		if (dth_in->dth_solo) {
+			if (err == 0 && cont->vc_solo_dtx_epoch < dth_in->dth_epoch)
+				cont->vc_solo_dtx_epoch = dth_in->dth_epoch;
+
+			vos_dtx_post_handle(cont, &dae, &dce, 1, false, err != 0);
+		} else {
+			D_ASSERT(dce == NULL);
+		}
+	}
+
 	if (err != 0) {
 		/* The transaction aborted or failed to commit. */
 		vos_tx_publish(dth, false);
 		if (dtx_is_valid_handle(dth_in))
 			vos_dtx_cleanup_internal(dth);
-	}
-
-	if (dce != NULL) {
-		struct vos_dtx_act_ent	*dae = dth_in->dth_ent;
-
-		vos_dtx_post_handle(cont, &dae, &dce, 1, false,
-				    err != 0 ? true : false);
-		dth_in->dth_ent = NULL;
 	}
 
 	return err;

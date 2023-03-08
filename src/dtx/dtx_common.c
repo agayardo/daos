@@ -995,6 +995,13 @@ out:
 	return 0;
 }
 
+void
+dtx_renew_epoch(struct dtx_epoch *epoch, struct dtx_handle *dth)
+{
+	dth->dth_epoch = epoch->oe_value;
+	dth->dth_epoch_bound = dtx_epoch_bound(epoch);
+}
+
 /**
  * Initialize the DTX handle for per modification based part.
  *
@@ -1183,7 +1190,8 @@ dtx_leader_end(struct dtx_leader_handle *dlh, struct ds_cont_hdl *coh, int resul
 	struct dtx_memberships		*mbs;
 	size_t				 size;
 	uint32_t			 flags;
-	int				 status = -1;
+	uint32_t			 status;
+	int				 i;
 	int				 rc = 0;
 	bool				 aborted = false;
 	bool				 unpin = false;
@@ -1204,33 +1212,39 @@ dtx_leader_end(struct dtx_leader_handle *dlh, struct ds_cont_hdl *coh, int resul
 	if (daos_is_zero_dti(&dth->dth_xid))
 		D_GOTO(out, result = result < 0 ? result : rc);
 
-	if (dth->dth_need_validation) {
+	if (result < 0 || rc < 0)
+		D_GOTO(abort, result = result < 0 ? result : rc);
+
+	if (dth->dth_need_validation || unlikely(dth->dth_aborted)) {
 		/* During waiting for bulk data transfer or other non-leaders, the DTX
 		 * status may be changes by others (such as DTX resync or DTX refresh)
 		 * by race. Let's check it.
 		 */
 		status = vos_dtx_validation(dth);
-		if (unlikely(status == DTX_ST_COMMITTED || status == DTX_ST_COMMITTABLE))
+		switch (status) {
+		case DTX_ST_PREPARED:
+			if (likely(!dth->dth_aborted))
+				break;
+			/* Fall through */
+		case DTX_ST_INITED:
+		case DTX_ST_PREPARING:
+			aborted = true;
+			D_GOTO(out, result = -DER_AGAIN);
+		case DTX_ST_ABORTED:
+		case DTX_ST_ABORTING:
+			aborted = true;
+			D_GOTO(out, result = -DER_INPROGRESS);
+		case DTX_ST_COMMITTED:
+		case DTX_ST_COMMITTING:
+		case DTX_ST_COMMITTABLE:
 			D_GOTO(out, result = 0);
+		default:
+			D_ASSERT(0);
+		}
 	}
 
-	if (result < 0 || rc < 0 || dth->dth_solo)
-		D_GOTO(abort, result = result < 0 ? result : rc);
-
-	switch (status) {
-	case -1:
-	case DTX_ST_PREPARED:
-		break;
-	case DTX_ST_INITED:
-		if (dth->dth_modification_cnt == 0 || !dth->dth_active)
-			break;
-		/* Fall through */
-	case DTX_ST_ABORTED:
-		aborted = true;
-		D_GOTO(out, result = -DER_INPROGRESS);
-	default:
-		D_ASSERT(0);
-	}
+	if (dth->dth_solo)
+		D_GOTO(out, result = 0);
 
 	if ((!dth->dth_active && dth->dth_dist) || dth->dth_prepared || dtx_batched_ult_max == 0) {
 		/* We do not know whether some other participants have
@@ -1411,10 +1425,10 @@ out:
 
 	D_ASSERTF(result <= 0, "unexpected return value %d\n", result);
 
-	/* Local modification is done, then need to handle CoS cache. */
-	if (dth->dth_cos_done) {
-		int	i;
-
+	/* If piggyback DTX has been done everywhere, then need to handle CoS cache.
+	 * It is harmless to keep some partially committed DTX entries in CoS cache.
+	 */
+	if (result == 0 && dth->dth_cos_done) {
 		for (i = 0; i < dth->dth_dti_cos_count; i++)
 			dtx_del_cos(cont, &dth->dth_dti_cos[i],
 				    &dth->dth_leader_oid, dth->dth_dkey_hash);

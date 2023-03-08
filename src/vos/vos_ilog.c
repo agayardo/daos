@@ -1,5 +1,5 @@
 /**
- * (C) Copyright 2019-2022 Intel Corporation.
+ * (C) Copyright 2019-2023 Intel Corporation.
  *
  * SPDX-License-Identifier: BSD-2-Clause-Patent
  */
@@ -57,7 +57,9 @@ vos_ilog_is_same_tx(struct umem_instance *umm, uint32_t tx_id,
 		if (!dtx_is_valid_handle(dth))
 			*same = true;
 	} else if (tx_id == dtx) {
-		*same = true;
+		/* For non-committed solo transaction, it must be different from current one. */
+		if (!(tx_id & DTX_LID_SOLO_FLAG))
+			*same = true;
 	}
 
 	return 0;
