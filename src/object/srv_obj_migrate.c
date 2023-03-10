@@ -1408,7 +1408,7 @@ migrate_punch(struct migrate_pool_tls *tls, struct migrate_one *mrone,
 	int	i;
 
 	/* Punch dkey */
-	if (mrone->mo_dkey_punch_eph != 0) {
+	if (mrone->mo_dkey_punch_eph != 0 && mrone->mo_dkey_punch_eph <= mrone->mo_epoch) {
 		D_DEBUG(DB_REBUILD, DF_UOID" punch dkey "DF_KEY"/"DF_U64"\n",
 			DP_UOID(mrone->mo_oid), DP_KEY(&mrone->mo_dkey),
 			mrone->mo_dkey_punch_eph);
@@ -1428,7 +1428,7 @@ migrate_punch(struct migrate_pool_tls *tls, struct migrate_one *mrone,
 
 		eph = mrone->mo_akey_punch_ephs[i];
 		D_ASSERT(eph != DAOS_EPOCH_MAX);
-		if (eph == 0)
+		if (eph == 0 || eph > mrone->mo_epoch)
 			continue;
 
 		D_DEBUG(DB_REBUILD, DF_UOID" mrone %p punch dkey "
@@ -1450,7 +1450,7 @@ migrate_punch(struct migrate_pool_tls *tls, struct migrate_one *mrone,
 	}
 
 	/* punch records */
-	if (mrone->mo_punch_iod_num > 0) {
+	if (mrone->mo_punch_iod_num > 0 && mrone->mo_rec_punch_eph <= mrone->mo_epoch) {
 		rc = vos_obj_update(cont->sc_hdl, mrone->mo_oid,
 				    mrone->mo_rec_punch_eph,
 				    mrone->mo_version, 0, &mrone->mo_dkey,
