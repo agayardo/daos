@@ -19,6 +19,8 @@ basic_pda_test(void **state)
 {
 	struct pool_map		*po_map;
 	struct pl_map		*pl_map;
+	struct pl_obj_layout	*layout = NULL;
+	daos_obj_id_t		 oid;
 
 	/* --------------------------------------------------------- */
 	print_message("\nWith 2 domains, 1 nodes each, 4 targets each = 8 targets\n");
@@ -39,10 +41,22 @@ basic_pda_test(void **state)
 	print_message("place OC_EC8P2G2 pda 4\n");
 	assert_placement_success_print(pl_map, OC_EC_8P2G2, 4);
 
-	/* --------------------------------------------------------- */
 	print_message("place OC_EC16P2G8 pda 3, need 18 domains will fail\n");
 	assert_invalid_param(pl_map, OC_EC_16P2G8, 3);
 
+	free_pool_and_placement_map(po_map, pl_map);
+
+	/* --------------------------------------------------------- */
+	/* test a specific oid layout that ever failed in daos IO test */
+	print_message("\nWith 4 PDs, 1 domains each PD, 4 nodes each domain, "
+		      "8 targets each node = 128 targets\n");
+	gen_maps(4, 1, 4, 8, &po_map, &pl_map);
+
+	print_message("place OC_SX special OID, pda 3\n");
+	oid.hi = 282024732524595UL;
+	oid.lo = 20;
+	assert_success(plt_obj_place(oid, 3, &layout, pl_map, false));
+	pl_obj_layout_free(layout);
 	free_pool_and_placement_map(po_map, pl_map);
 }
 

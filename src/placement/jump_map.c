@@ -138,6 +138,7 @@ jm_obj_shard_pd(struct jm_obj_placement *jmop, uint32_t shard)
 	D_ASSERT(shard < jmop->jmop_grp_size * jmop->jmop_grp_nr);
 	pd_idx = (shard / jmop->jmop_pd_grp_size) % jmop->jmop_pd_nr;
 
+	D_DEBUG(DB_PL, "shard %d, on pd_idx %d\n", shard, pd_idx);
 	return jmop->jmop_pd_ptrs[pd_idx];
 }
 
@@ -264,8 +265,11 @@ jm_obj_placement_init(struct pl_jump_map *jmap, struct daos_obj_md *md,
 		jmop->jmop_grp_nr = nr_grps;
 		if (jmop->jmop_grp_nr == DAOS_OBJ_GRP_MAX)
 			jmop->jmop_grp_nr = grp_max;
-		else if (jmop->jmop_grp_nr > grp_max)
+		else if (jmop->jmop_grp_nr > grp_max) {
+			D_ERROR("jmop->jmop_grp_nr %d, grp_max %d, grp_size %d\n",
+				jmop->jmop_grp_nr, grp_max, jmop->jmop_grp_size);
 			return -DER_INVAL;
+		}
 	} else {
 		jmop->jmop_grp_nr = 1;
 	}
@@ -281,7 +285,7 @@ jm_obj_placement_init(struct pl_jump_map *jmap, struct daos_obj_md *md,
 	else
 		D_ERROR("obj="DF_OID", jm_obj_pd_init failed, "DF_RC"\n", DP_OID(oid), DP_RC(rc));
 
-	return 0;
+	return rc;
 }
 
 /**

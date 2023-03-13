@@ -284,6 +284,7 @@ __get_target_v1(struct pool_domain *root_pos, struct pool_domain *curr_pd,
 
 						D_DEBUG(DB_PL, "dom %u used up\n", off);
 						setbit(dom_full, off);
+						setbit(dom_used, off);
 					}
 					--top;
 				}
@@ -367,8 +368,10 @@ __get_target_v1(struct pool_domain *root_pos, struct pool_domain *curr_pd,
 				int idx;
 
 				for (idx = start_dom; idx <= end_dom; ++idx)
-					if (!isset(dom_full, idx))
+					if (!isset(dom_full, idx)) {
 						clrbit(dom_used, idx);
+						D_DEBUG(DB_PL, "clrbit dom_used %d\n", idx);
+					}
 				if (top == -1)
 					curr_dom = curr_pd;
 				else
@@ -385,7 +388,6 @@ __get_target_v1(struct pool_domain *root_pos, struct pool_domain *curr_pd,
 				_dom = _get_dom(curr_dom, selected_dom, exclude_new, allow_version);
 				selected_dom = _dom - curr_dom->do_children;
 			} while (isset(dom_used, start_dom + selected_dom) ||
-				 isset(dom_full, start_dom + selected_dom) ||
 				 isset(dom_cur_grp_used, start_dom + selected_dom));
 
 			D_ASSERTF(isclr(dom_full, start_dom + selected_dom), "selected_dom %u\n",
@@ -461,6 +463,7 @@ reset_dom_cur_grp_v1(struct pool_domain *root, uint8_t *dom_cur_grp_used,
 	struct pool_domain	*tree;
 	uint32_t		dom_nr;
 
+	D_DEBUG(DB_PL, "bitmap resetting...\n");
 	tree = root;
 	dom_nr = tree[0].do_children - tree;
 	/* Walk through the failure domain to reset full, current_group and tgts used bits */
