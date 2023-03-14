@@ -660,7 +660,10 @@ vos_pool_create(const char *path, uuid_t uuid, daos_size_t scm_sz,
 		return daos_errno2der(errno);
 	}
 
-	rc = vos_pmemobj_create(path, uuid, VOS_POOL_LAYOUT, scm_sz, nvme_sz, 0, flags, &ph);
+	/* default_cluster_sz(): DAOS_BS_CLUSTER_SZ: 32MB */
+	size_t wal_sz = (flags & VOS_POF_SMALL) ? (1ULL << 25) : 0;
+
+	rc = vos_pmemobj_create(path, uuid, VOS_POOL_LAYOUT, scm_sz, nvme_sz, wal_sz, flags, &ph);
 	if (rc) {
 		D_ERROR("Failed to create pool %s, scm_sz="DF_U64", nvme_sz="DF_U64". "DF_RC"\n",
 			path, scm_sz, nvme_sz, DP_RC(rc));
