@@ -4,16 +4,14 @@
   SPDX-License-Identifier: BSD-2-Clause-Patent
 '''
 import os
-import traceback
 import random
-import base64
 import time
 
-from pydaos.raw import DaosApiError
-from general_utils import get_random_bytes, pcmd, run_pcmd
+from general_utils import get_random_bytes
 from agent_utils import include_local_host
 from command_utils_base import CommandFailure
 from ior_test_base import IorTestBase
+from run_utils import run_remote
 
 
 class UpgradeDowngradeBase(IorTestBase):
@@ -29,6 +27,8 @@ class UpgradeDowngradeBase(IorTestBase):
         self.daos_cmd = None
         self.upgrade_repo = ""
         self.downgrade_repo = ""
+        self.old_version = ""
+        self.new_version = ""
 
     @staticmethod
     def create_data_set(num_attributes):
@@ -73,31 +73,6 @@ class UpgradeDowngradeBase(IorTestBase):
                     "FAIL: Name does not match after list attr, Expected "
                     "buf={} and received buf={}".format(key, attributes_list))
 
-    def verify_get_attr(self, indata, outdata):
-        """verify the Attributes value after get_attr
-
-        Args:
-             indata (dict): In data item of container get_attr.
-             outdata (dict): Out data from container get_attr.
-        """
-        decoded = {}
-        for key, val in outdata.items():
-            if isinstance(val, bytes):
-                decoded[key.decode()] = val
-            else:
-                decoded[key] = base64.b64decode(val)
-
-        self.log.info("Verifying get_attr output:")
-        self.log.info("  get_attr data: %s", indata)
-        self.log.info("  set_attr data: %s", decoded)
-
-        for attr, value in indata.items():
-            if value != decoded.get(attr.decode(), None):
-                self.fail(
-                    "FAIL: Value does not match after get({}), Expected "
-                    "val={} and received val={}".format(attr, value,
-                                                        decoded.get(attr.decode(), None)))
-
     def verify_pool_attrs(self, pool_attr_dict):
         """"verify pool attributes
 
@@ -105,24 +80,10 @@ class UpgradeDowngradeBase(IorTestBase):
             pool_attr_dict (dict): expected pool attributes data.
         """
         try:
-            pool_attrs = self.daos_cmd.pool_list_attrs(pool=self.pool.uuid, verbose=True)
+            pool_attrs = self.daos_cmd.pool_list_attrs(pool=self.pool.identifier, verbose=True)
             self.verify_list_attr(pool_attr_dict, pool_attrs['response'])
-        except DaosApiError as excep:
-            self.log.info(excep)
-            self.log.info(traceback.format_exc())
-            self.fail("#Test failed at pool attributes verification.\n")
-
-    def check_result(self, result):
-        """check for command result, raise failure when error encountered
-
-        Args:
-             result (dict): dictionary of result to check.
-        """
-        self.log.info("--check_result, result= %s", result)
-        if result[0]['exit_status'] != 0:
-            self.fail("##Error detected from check_result")
-        else:
-            self.log.info("--check_result passed")
+        except CommandFailure as error:
+            self.fail("Failed to verify pool attributes: {}".format(error))
 
     def show_daos_version(self, all_hosts, hosts_client):
         """show daos version
@@ -131,12 +92,12 @@ class UpgradeDowngradeBase(IorTestBase):
             all_hosts (NodeSet): all hosts.
             hosts_client (NodeSet): client hosts to show daos and dmg version.
         """
-        result = run_pcmd(all_hosts, "rpm -qa | grep daos")
-        self.check_result(result)
-        result = run_pcmd(hosts_client, "dmg version")
-        self.check_result(result)
-        result = run_pcmd(hosts_client, "daos version")
-        self.check_result(result)
+        if not run_remote(self.log, all_hosts, "rpm -qa | grep daos").passed:
+            self.fail("Failed to check daos RPMs")
+        if not run_remote(self.log, hosts_client, "dmg -i version").passed:  # TODO remove -i
+            self.fail("Failed to check dmg vesion")
+        if not run_remote(self.log, hosts_client, "daos version").passed:
+            self.fail("Failed to check daos version")
 
     def updowngrade_via_repo(self, servers, clients, repo_1, repo_2):
         """Upgrade downgrade hosts
@@ -165,18 +126,18 @@ class UpgradeDowngradeBase(IorTestBase):
         if servers:
             self.log.info("==upgrade_downgrading on servers: %s", servers)
             for cmd in cmds_svr:
-                self.log.info("==cmd= %s", cmd)
-                result = run_pcmd(servers, cmd)
-            self.log.info("==servers pcmd yum upgrade/downgrade result= %s", result)
+                if not run_remote(self.log, servers, cmd).passed:
+                    self.fail("Failed to upgrade/downgrade servers via repo")
+            self.log.info("==servers upgrade/downgrade success")
             # (5)Restart servers
             self.log.info("==Restart servers after upgrade/downgrade.")
             self.restart_servers()
         if clients:
             self.log.info("==upgrade_downgrading on hosts_client: %s", clients)
             for cmd in cmds_client:
-                self.log.info("==cmd= %s", cmd)
-                result = run_pcmd(clients, cmd)
-            self.log.info("==clients pcmd yum upgrade/downgrade result= %s", result)
+                if not run_remote(self.log, clients, cmd).passed:
+                    self.fail("Failed to upgrade/downgrade clients via repo")
+            self.log.info("==clients upgrade/downgrade success")
 
         self.log.info("==sleeping 5 more seconds after upgrade/downgrade")
         time.sleep(5)
@@ -226,11 +187,11 @@ class UpgradeDowngradeBase(IorTestBase):
         cmds.append("sudo ipcs")
         self.log.info("==upgrade_downgrading on hosts: %s", hosts)
         for cmd in cmds:
-            self.log.info("==cmd= %s", cmd)
-            result = run_pcmd(hosts, cmd)
+            if not run_remote(self.log, hosts, cmd).passed:
+                self.fail("Failed to upgrade/downgrade via rpms")
         self.log.info("==sleeping 5 more seconds")
         time.sleep(5)
-        self.log.info("==pcmd yum upgrade/downgrade result= %s", result)
+        self.log.info("==upgrade/downgrade via rpms success")
 
     def daos_ver_after_upgraded(self, host):
         """To display daos and dmg version, and check for error.
@@ -243,44 +204,37 @@ class UpgradeDowngradeBase(IorTestBase):
             "dmg version",
             "daos pool query {}".format(self.pool.identifier)]
         for cmd in cmds:
-            self.log.info("==cmd= %s", cmd)
-            result = pcmd(host, cmd, False)
-            if 0 not in result or len(result) > 1:
-                failed = []
-                for item, value in list(result.items()):
-                    if item != 0:
-                        failed.extend(value)
-                raise CommandFailure("##Error occurred running '{}' on {}".format(
-                    cmd, host))
-            self.log.info("==>%s result= %s", cmd, result)
+            if not run_remote(self.log, host, cmd).passed:
+                self.fail("Failed to get daos and dmg version after upgrade/downgrade")
 
-    def verify_daos_libdaos(self, step, hosts_client, cmd, positive_test, agent_server_ver,
-                            exp_err=None):
+    def verify_daos_libdaos(self, step, hosts, cmd, positive_test, agent_server_ver, exp_err=None):
         """Verify daos and libdaos interoperability between different version of agent and server.
 
         Args:
             step (str): test step for logging.
-            hosts_client (NodeSet): clients to launch test.
-            cmd (str): command to launch.
+            hosts (NodeSet): hosts to run command on.
+            cmd (str): command to run.
             positive_test (bool): True for positive test, false for negative test.
             agent_server_ver (str): agent and server version.
-            exp_err (str): expected error message for negative testcase.
+            exp_err (str, optional): expected error message for negative testcase.
+                Defaults to None.
         """
         if positive_test:
             self.log.info("==(%s)Positive_test: %s, on %s", step, cmd, agent_server_ver)
         else:
             self.log.info("==(%s)Negative_test: %s, on %s", step, cmd, agent_server_ver)
-        return1 = run_pcmd(hosts_client, cmd)
+        result = run_remote(self.log, hosts, cmd)
         if positive_test:
-            if return1[0]['exit_status']:
+            if not result.passed:
                 self.fail("##({0})Test failed, {1}, on {2}".format(step, cmd, agent_server_ver))
         else:
-            self.log.info("-->return1= %s", return1)
-            if not return1[0]['exit_status']:
+            if result.passed_hosts:
                 self.fail("##({0})Test failed, {1}, on {2}".format(step, cmd, agent_server_ver))
-            if exp_err not in return1[0]['stdout'][0]:
-                self.fail("##({0})Test failed, {1}, on {2}, expect_err {3} "
-                          "not shown on stdout".format(step, cmd, agent_server_ver, exp_err))
+            for stdout in result.all_stdout.values():
+                if exp_err not in stdout:
+                    self.fail("##({0})Test failed, {1}, on {2}, expect_err {3} "
+                              "not shown on stdout".format(step, cmd, agent_server_ver, exp_err))
+                
         self.log.info("==(%s)Test passed, %s, on %s", step, cmd, agent_server_ver)
 
     def has_fault_injection(self, hosts):
@@ -288,27 +242,36 @@ class UpgradeDowngradeBase(IorTestBase):
 
         Args:
             hosts (string, list): client hosts to execute the command.
-        """
-        status = True
-        result = run_pcmd(hosts, "daos_debug_set_params -v 67174515")
-        self.log.info("--check_result, result= %s", result)
-        if result[0]['stdout'] == []:
-            self.log.info("#Host client rpms did not have fault-injection")
-            status = False
-        return status
 
-    def enable_disable_fault_injection(self, hosts, enable=True):
-        """Enable and disable fault injection.
+        Returns:
+            bool: whether RPMs have fault-injection.
+        """
+        result = run_remote(self.log, hosts, "daos_debug_set_params -v 67174515")
+        if not result.passed:
+            self.fail("Failed to check if fault-injection is enabled")
+        for stdout in result.all_stdout.values():
+            if not stdout.strip():
+                return True
+        self.log.info("#Host client rpms did not have fault-injection")
+        return False
+
+    def enable_fault_injection(self, hosts):
+        """Enable fault injection.
 
         Args:
-            hosts (string, list): client hosts to execute the command.
-            enable (Bool): enable or disable the fault injection
+            hosts (string, list): hosts to enable fualt injection on.
         """
-        if enable:
-            result = run_pcmd(hosts, "daos_debug_set_params -v 67174515")
-        else:
-            result = run_pcmd(hosts, "daos_debug_set_params -v 67108864")
-        self.check_result(result)
+        if not run_remote(self.log, hosts, "daos_debug_set_params -v 67174515").passed:
+            self.fail("Failed to enable fault injection")
+
+    def disable_fault_injection(self, hosts):
+        """Disable fault injection.
+
+        Args:
+            hosts (string, list): hosts to disable fualt injection on.
+        """
+        if not run_remote(self.log, hosts, "daos_debug_set_params -v 67108864").passed:
+            self.fail("Failed to disable fault injection")
 
     def verify_pool_upgrade_status(self, pool_id, expected_status):
         """Verify pool upgrade status.
@@ -330,43 +293,39 @@ class UpgradeDowngradeBase(IorTestBase):
             pool_id (str): pool to be upgraded
         """
         # Verify pool status before upgrade
-        expected_status = "not started"
-        self.verify_pool_upgrade_status(pool_id, expected_status)
+        self.verify_pool_upgrade_status(pool_id, expected_status="not started")
 
         # Enable fault-injection
-        self.enable_disable_fault_injection(hosts, enable=True)
+        self.enable_fault_injection(hosts)
 
         # Pool upgrade
-        result = run_pcmd(hosts, "dmg pool upgrade {}".format(pool_id))
-        self.check_result(result)
+        if not run_remote(self.log, hosts, "dmg pool upgrade {}".format(pool_id)).passed:
+            self.fail("dmg pool upgrade failed")
         # Verify pool status during upgrade
-        expected_status = "in progress"
-        self.verify_pool_upgrade_status(pool_id, expected_status)
+        self.verify_pool_upgrade_status(pool_id, expected_status="in progress")
         # Verify pool status during upgrade
-        expected_status = "failed"
-        self.verify_pool_upgrade_status(pool_id, expected_status)
+        self.verify_pool_upgrade_status(pool_id, expected_status="failed")
 
         # Disable fault-injection
-        self.enable_disable_fault_injection(hosts, enable=False)
+        self.disable_fault_injection(hosts)
         # Verify pool upgrade resume after removal of fault-injection
-        expected_status = "completed"
-        self.verify_pool_upgrade_status(pool_id, expected_status)
+        self.verify_pool_upgrade_status(pool_id, expected_status="completed")
 
     def diff_versions_agent_server(self):
         """Interoperability of different versions of DAOS agent and server.
         Test step:
-            (1)Setup
-            (2)dmg system stop
-            (3)Upgrade 1 server-host to new version
-            (4)Negative test - dmg pool query on mix-version servers
-            (5)Upgrade rest server-hosts to 2.2
-            (6)Restart 2.0 agent
-            (7)Verify 2.0 agent connect to 2.2 server, daos and libdaos
-            (8)Upgrade agent to 2.2
-            (9)Verify pool and containers create on 2.2 agent and server
-            (10)Downgrade server to 2.0
-            (11)Verify 2.2 agent to 2.0 server, daos and libdaos
-            (12)Downgrade agent to 2.0
+            (1) Setup
+            (2) dmg system stop
+            (3) Upgrade 1 server-host to the new version
+            (4) Negative test - dmg pool query on mix-version servers
+            (5) Upgrade remaining server hosts to the new version
+            (6) Restart old agent
+            (7) Verify old agent connects to new server, daos and libdaos
+            (8) Upgrade agent to the new version
+            (9) Verify pool and containers created with new agent and server
+            (10) Downgrade server to the old version
+            (11) Verify new agent to old server, daos and libdaos
+            (12) Downgrade agent to the old version
 
         """
         # (1)Setup
@@ -376,6 +335,8 @@ class UpgradeDowngradeBase(IorTestBase):
         all_hosts = include_local_host(hosts_server | hosts_client)
         self.upgrade_repo = self.params.get("upgrade_repo", '/run/interop/*')
         self.downgrade_repo = self.params.get("downgrade_repo", '/run/interop/*')
+        self.old_version = self.params.get("old_version", '/run/interop/*')
+        self.new_version = self.params.get("new_version", '/run/interop/*')
         self.add_pool(connect=False)
         pool_id = self.pool.identifier
         self.add_container(self.pool)
@@ -383,44 +344,44 @@ class UpgradeDowngradeBase(IorTestBase):
         cmd = "dmg system query"
         positive_test = True
         negative_test = False
-        agent_server_ver = "2.0 agent to 2.0 server"
+        agent_server_ver = f"{self.old_version} agent to {self.old_version} server"
         self.verify_daos_libdaos("1.1", hosts_client, cmd, positive_test, agent_server_ver)
 
-        # (2)dmg system stop
+        # (2) dmg system stop
         self.log.info("==(2)Dmg system stop.")
         self.get_dmg_command().system_stop()
         errors = []
         errors.extend(self._stop_managers(self.server_managers, "servers"))
         errors.extend(self._stop_managers(self.agent_managers, "agents"))
 
-        # (3)Upgrade 1 server-host to new
-        self.log.info("==(3)Upgrade 1 server to 2.2.")
+        # (3) Upgrade 1 server-host to new
+        self.log.info("==(3)Upgrade 1 server to %s.", self.new_version)
         server = hosts_server[0:1]
         self.upgrade(server, [])
-        self.log.info("==(3.1)server %s Upgrade to 2.2 completed.", server)
+        self.log.info("==(3.1)server %s Upgrade to %s completed.", server, self.new_version)
 
-        # (4)Negative test - dmg pool query on mix-version servers
+        # (4) Negative test - dmg pool query on mix-version servers
         self.log.info("==(4)Negative test - dmg pool query on mix-version servers.")
-        agent_server_ver = "2.0 agent, mix-version server-hosts"
+        agent_server_ver = f"{self.old_version} agent to mixed-version servers"
         cmd = "dmg pool list"
         exp_err = "unable to contact the DAOS Management Service"
         self.verify_daos_libdaos(
             "4.1", hosts_client, cmd, negative_test, agent_server_ver, exp_err)
 
-        # (5)Upgrade rest server-hosts to 2.2
-        server = hosts_server[1:len(hosts_server)]
-        self.log.info("==(5) Upgrade rest server %s to 2.2.", server)
+        # (5) Upgrade remaining servers to the new version
+        server = hosts_server[1:]
+        self.log.info("==(5) Upgrade remaining servers %s to %s.", server, self.new_version)
         self.upgrade(server, [])
-        self.log.info("==(5.1) server %s Upgrade to 2.2 completed.", server)
+        self.log.info("==(5.1) server %s Upgrade to %s completed.", server, self.new_version)
 
-        # (6)Restart 2.0 agent
-        self.log.info("==(6)Restart 2.0 agent")
+        # (6) Restart old agent
+        self.log.info("==(6)Restart %s agent", self.old_version)
         self._start_manager_list("agent", self.agent_managers)
         self.show_daos_version(all_hosts, hosts_client)
 
-        # (7)Verify 2.0 agent connect to 2.2 server
-        self.log.info("==(7)Verify 2.0 agent connect to 2.2 server")
-        agent_server_ver = "2.0 agent to 2.2 server"
+        # (7)Verify old agent connect to new server
+        self.log.info("==(7)Verify %s agent connect to %s server", self.old_version, self.new_version)
+        agent_server_ver = f"{self.old_version} agent to {self.new_version} server"
         cmd = "daos pool query {0}".format(pool_id)
         self.verify_daos_libdaos("7.1", hosts_client, cmd, positive_test, agent_server_ver)
         cmd = "dmg pool query {0}".format(pool_id)
@@ -434,15 +395,17 @@ class UpgradeDowngradeBase(IorTestBase):
         cmd = "daos pool autotest --pool {0}".format(pool_id)
         self.verify_daos_libdaos("7.5", hosts_client, cmd, positive_test, agent_server_ver)
 
-        # (8)Upgrade agent to 2.2
-        self.log.info("==(8)Upgrade agent to 2.2, now 2.2 servers 2.2 agent.")
+        # (8) Upgrade agent to the new version
+        self.log.info("==(8)Upgrade agent to %s, now %s servers %s agent.",
+                      self.new_version, self.new_version, self.new_version)
         self.upgrade([], hosts_client)
         self._start_manager_list("agent", self.agent_managers)
         self.show_daos_version(all_hosts, hosts_client)
 
-        # (9)Pool and containers create on 2.2 agent and server
-        self.log.info("==(9)Create new pools and containers on 2.2 agent to 2.2 server")
-        agent_server_ver = "2.2 agent to 2.2 server"
+        # (9) Pool and containers create on new agent and server
+        self.log.info("==(9)Create new pools and containers on %s agent to %s server",
+                      self.new_version, self.new_version)
+        agent_server_ver = f"{self.new_version} agent to {self.new_version} server"
         cmd = "dmg pool create --size 5G New_pool1"
         self.verify_daos_libdaos("9.1", hosts_client, cmd, positive_test, agent_server_ver)
         cmd = "dmg pool list"
@@ -458,21 +421,22 @@ class UpgradeDowngradeBase(IorTestBase):
         cmd = "daos pool autotest --pool New_pool1"
         self.verify_daos_libdaos("9.7", hosts_client, cmd, positive_test, agent_server_ver)
 
-        # (10)Downgrade server to 2.0
-        self.log.info("==(10)Downgrade server to 2.0, now 2.2 agent to 2.0 server.")
-        self.log.info("==(10.1)Dmg system stop.")
+        # (10) Downgrade server to the old version
+        self.log.info("==(10) Downgrade server to %s, now %s agent to %s server.",
+                      self.old_version, self.new_version, self.old_version)
+        self.log.info("==(10.1) Dmg system stop.")
         self.get_dmg_command().system_stop()
         errors = []
         errors.extend(self._stop_managers(self.server_managers, "servers"))
         errors.extend(self._stop_managers(self.agent_managers, "agents"))
-        self.log.info("==(10.2)Downgrade server to 2.0")
+        self.log.info("==(10.2) Downgrade server to %s", self.old_version)
         self.downgrade(hosts_server, [])
-        self.log.info("==(10.3)Restart 2.0 agent")
+        self.log.info("==(10.3) Restart %s agent", self.old_version)
         self._start_manager_list("agent", self.agent_managers)
         self.show_daos_version(all_hosts, hosts_client)
 
-        # (11)Verify 2.2 agent to 2.0 server
-        agent_server_ver = "2.2 agent to 2.0 server"
+        # (11) Verify new agent to old server
+        agent_server_ver = f"{self.new_version} agent to {self.old_version} server"
         cmd = "daos pool query {0}".format(pool_id)
         self.verify_daos_libdaos("11.1", hosts_client, cmd, positive_test, agent_server_ver)
         cmd = "dmg pool query {0}".format(pool_id)
@@ -493,7 +457,7 @@ class UpgradeDowngradeBase(IorTestBase):
         self.verify_daos_libdaos(
             "11.6", hosts_client, cmd, negative_test, agent_server_ver, exp_err)
 
-        # (12)Downgrade agent to 2.0
+        # (12) Downgrade agent to the old version
         self.log.info("==(12)Agent %s  Downgrade started.", hosts_client)
         self.downgrade([], hosts_client)
         self.log.info("==Test passed")
@@ -527,19 +491,20 @@ class UpgradeDowngradeBase(IorTestBase):
         Args:
             fault_on_pool_upgrade (bool): Enable fault-injection during pool upgrade.
         """
-        # (1)Setup
+        # (1) Setup
         self.log.info("(1)==Setup and show rpm, dmg and daos versions on all hosts.")
         hosts_client = self.hostlist_clients
         hosts_server = self.hostlist_servers
         all_hosts = include_local_host(hosts_server)
         self.upgrade_repo = self.params.get("upgrade_repo", '/run/interop/*')
         self.downgrade_repo = self.params.get("downgrade_repo", '/run/interop/*')
+        self.old_version = self.params.get("old_version", '/run/interop/*')
+        self.new_version = self.params.get("new_version", '/run/interop/*')
         num_attributes = self.params.get("num_attributes", '/run/attrtests/*')
-        ior_api = self.params.get("api", '/run/ior/*')
         mount_dir = self.params.get("mount_dir", '/run/dfuse/*')
         self.show_daos_version(all_hosts, hosts_client)
 
-        # (2)Create pool container and pool attributes
+        # (2) Create pool container and pool attributes
         self.log.info("(2)==Create pool attributes.")
         self.add_pool(connect=False)
         pool_id = self.pool.identifier
@@ -552,23 +517,25 @@ class UpgradeDowngradeBase(IorTestBase):
         self.container.close()
         self.pool.disconnect()
 
-        # (3)Setup and run IOR
+        # (3) Setup and run IOR
         self.log.info("(3)==Setup and run IOR.")
-        result = run_pcmd(hosts_client, "mkdir -p {}".format(mount_dir))
-        ior_timeout = self.params.get("ior_timeout", '/run/ior/*')
-        iorflags_write = self.params.get("write_flg", '/run/ior/iorflags/*')
-        iorflags_read = self.params.get("read_flg", '/run/ior/iorflags/*')
+        if not run_remote(self.log, hosts_client, f"mkdir -p {mount_dir}").passed:
+            self.fail("Failed to create dfuse mount directory")
+        ior_api = self.ior_cmd.api.value
+        ior_timeout = self.params.get("ior_timeout", self.ior_cmd.namespace)
+        ior_write_flags = self.params.get("write_flags", self.ior_cmd.namespace)
+        ior_read_flags = self.params.get("read_flags", self.ior_cmd.namespace)
         testfile = os.path.join(mount_dir, "testfile")
         testfile_sav = os.path.join(mount_dir, "testfile_sav")
         testfile_sav2 = os.path.join(mount_dir, "testfile_sav2")
         symlink_testfile = os.path.join(mount_dir, "symlink_testfile")
-        # (3.a)ior dfs
+        # (3.a) ior dfs
         if ior_api in ("DFS", "POSIX"):
             self.log.info("(3.a)==Run non-HDF5 IOR write and read.")
-            self.ior_cmd.flags.update(iorflags_write)
+            self.ior_cmd.update_params(flags=ior_write_flags)
             self.run_ior_with_pool(
                 timeout=ior_timeout, create_pool=True, create_cont=True, stop_dfuse=False)
-            self.ior_cmd.flags.update(iorflags_read)
+            self.ior_cmd.update_params(flags=ior_read_flags)
             self.run_ior_with_pool(
                 timeout=ior_timeout, create_pool=False, create_cont=False, stop_dfuse=False)
 
@@ -576,11 +543,11 @@ class UpgradeDowngradeBase(IorTestBase):
         elif ior_api == "HDF5":
             self.log.info("(3.b)==Run IOR HDF5 write and read.")
             hdf5_plugin_path = self.params.get("plugin_path", '/run/hdf5_vol/')
-            self.ior_cmd.flags.update(iorflags_write)
+            self.ior_cmd.update_params(flags=ior_write_flags)
             self.run_ior_with_pool(
                 plugin_path=hdf5_plugin_path, mount_dir=mount_dir,
                 timeout=ior_timeout, create_pool=True, create_cont=True, stop_dfuse=False)
-            self.ior_cmd.flags.update(iorflags_read)
+            self.ior_cmd.update_params(flags=ior_read_flags)
             self.run_ior_with_pool(
                 plugin_path=hdf5_plugin_path, mount_dir=mount_dir,
                 timeout=ior_timeout, create_pool=False, create_cont=False, stop_dfuse=False)
@@ -590,28 +557,29 @@ class UpgradeDowngradeBase(IorTestBase):
         # (3.c)ior posix test file with symlink
         if ior_api == "POSIX":
             self.log.info("(3.c)==Symlink mounted testfile.")
-            result = run_pcmd(hosts_client, "cd {}".format(mount_dir))
-            result = run_pcmd(hosts_client, "ls -l {}".format(testfile))
-            result = run_pcmd(hosts_client, "cp {0} {1}".format(testfile, testfile_sav))
-            self.check_result(result)
-            result = run_pcmd(hosts_client, "cp {0} {1}".format(testfile, testfile_sav2))
-            self.check_result(result)
-            result = run_pcmd(
-                hosts_client, "ln -vs {0} {1}".format(testfile_sav2, symlink_testfile))
-            result = run_pcmd(hosts_client, "diff {0} {1}".format(testfile, testfile_sav))
-            self.check_result(result)
-            result = run_pcmd(hosts_client, "ls -l {}".format(symlink_testfile))
-            self.check_result(result)
+            cmd_list = [
+                "cd {}".format(mount_dir),
+                "ls -l {}".format(testfile),
+                "cp {0} {1}".format(testfile, testfile_sav),
+                "cp {0} {1}".format(testfile, testfile_sav2),
+                "ln -vs {0} {1}".format(testfile_sav2, symlink_testfile),
+                "diff {0} {1}".format(testfile, testfile_sav),
+                "ls -l {}".format(symlink_testfile)
+            ]
+            for cmd in cmd_list:
+                if not run_remote(self.log, hosts_client, cmd).passed:
+                    self.fail("Failed to setup dfuse test files with {}".format(cmd))
             self.container.close()
             self.pool.disconnect()
-            result = run_pcmd(hosts_client, "fusermount3 -u {}".format(mount_dir))
-            self.check_result(result)
+            cmd = "fusermount3 -u {}".format(mount_dir)
+            if not run_remote(self.log, hosts_client, cmd).passed:
+                self.fail("Failed to unmount dfuse")
 
         # Verify pool attributes before upgrade
         self.log.info("(3.2)==verify pool attributes before upgrade.")
         self.verify_pool_attrs(pool_attr_dict)
 
-        # (4)dmg system stop
+        # (4) dmg system stop
         self.log.info("(4)==Dmg system stop.")
         self.get_dmg_command().system_stop()
         errors = []
@@ -619,7 +587,7 @@ class UpgradeDowngradeBase(IorTestBase):
         errors.extend(self._stop_managers(self.agent_managers, "agents"))
 
         # (5)Upgrade
-        self.log.info("(5)==Upgrade RPMs to 2.2.")
+        self.log.info("(5)==Upgrade RPMs to %s", self.new_version)
         self.upgrade(hosts_server, hosts_client)
 
         self.log.info("==sleeping 30 more seconds")
@@ -630,7 +598,7 @@ class UpgradeDowngradeBase(IorTestBase):
 
         # (7)Verification after upgrade
         # Restart agent
-        self.log.info("(7.1)====Restarting rel_2.2 agent after upgrade.")
+        self.log.info("(7.1)====Restarting %s agent after upgrade.", self.new_version)
         self._start_manager_list("agent", self.agent_managers)
         self.show_daos_version(all_hosts, hosts_client)
 
@@ -656,33 +624,37 @@ class UpgradeDowngradeBase(IorTestBase):
                 timeout=ior_timeout, create_pool=False, create_cont=False, stop_dfuse=False)
         else:
             self.log.info("(7.c)==Run Symlink check after upgraded.")
-            result = run_pcmd(
-                hosts_client,
-                "dfuse --mountpoint {0} --pool {1} --container {2}".format(
-                    mount_dir, pool_id, self.container))
-            self.check_result(result)
-            result = run_pcmd(hosts_client, "diff {0} {1}".format(testfile, testfile_sav))
-            self.check_result(result)
-            result = run_pcmd(hosts_client, "diff {0} {1}".format(symlink_testfile, testfile_sav2))
-            self.check_result(result)
+            cmd = "dfuse --mountpoint {0} --pool {1} --container {2}".format(
+                mount_dir, pool_id, self.container.identifier)
+            if not run_remote(self.log, hosts_client, cmd).passed:
+                self.fail("Failed to mount dfuse")
+            cmd = "diff {0} {1}".format(testfile, testfile_sav)
+            if not run_remote(self.log, hosts_client, cmd).passed:
+                self.fail("dfuse files differ after upgrade")
+            cmd = "diff {0} {1}".format(symlink_testfile, testfile_sav2)
+            if not run_remote(self.log, hosts_client, cmd).passed:
+                self.fail("dfuse files differ after upgrade")
 
         # (8)Dmg pool get-prop
         self.log.info("(8)==Dmg pool get-prop after RPMs upgraded before Pool upgraded")
-        result = run_pcmd(hosts_client, "dmg pool get-prop {}".format(pool_id))
-        self.check_result(result)
+        if not run_remote(self.log, hosts_client, "dmg pool get-prop {}".format(pool_id)).passed:
+            self.fail("Failed to get pool properties after RPM upgrade")
 
         # (9)Pool property verification after upgraded
-        self.log.info("(9)==Dmg pool upgrade and get-prop after RPMs upgraded")
+        self.log.info("(9)==Dmg pool upgrade and get-prop after RPM upgrade")
 
         if fault_on_pool_upgrade and self.has_fault_injection(hosts_client):
             self.log.info("(9.1a)==Pool upgrade with fault-injection.")
             self.pool_upgrade_with_fault(hosts_client, pool_id)
         else:
             self.log.info("(9.1b)==Pool upgrade.")
-            result = run_pcmd(hosts_client, "dmg pool upgrade {}".format(pool_id))
-            self.check_result(result)
-        result = run_pcmd(hosts_client, "dmg pool get-prop {}".format(pool_id))
-        self.check_result(result)
+            cmd = "dmg pool upgrade {}".format(pool_id)
+            if not run_remote(self.log, hosts_client, cmd).passed:
+                self.fail("Failed to upgrade pool")
+
+        if not run_remote(self.log, hosts_client, "dmg pool get-prop {}".format(pool_id)).passed:
+            self.fail("Failed to get pool properties after pool upgrade")
+
         self.log.info("(9.2)==verify pool attributes after pool-upgraded.")
         self.verify_pool_attrs(pool_attr_dict)
         self.pool.destroy()
@@ -694,14 +666,15 @@ class UpgradeDowngradeBase(IorTestBase):
         self.get_dmg_command().pool_list(verbose=True)
         self.get_dmg_command().pool_query(pool=pool2_id)
         self.daos_cmd.pool_query(pool=pool2_id)
-        result = run_pcmd(hosts_client, "dmg pool get-prop {}".format(pool2_id))
-        self.check_result(result)
+        if not run_remote(self.log, hosts_client, "dmg pool get-prop {}".format(pool_id)).passed:
+            self.fail("Failed to get pool properties of new pool after RPM upgrade")
 
         # (11)Downgrade and cleanup
         self.log.info("(11)==Downgrade and cleanup.")
         if ior_api == "POSIX":
-            result = run_pcmd(hosts_client, "fusermount3 -u {}".format(mount_dir))
-            self.check_result(result)
+            cmd = "fusermount3 -u {}".format(mount_dir)
+            if not run_remote(self.log, hosts_client, cmd).passed:
+                self.fail("Failed to unmount dfuse")
         self.container.close()
         self.pool.disconnect()
         self.pool.destroy()
@@ -709,13 +682,13 @@ class UpgradeDowngradeBase(IorTestBase):
         errors = []
         errors.extend(self._stop_managers(self.server_managers, "servers"))
         errors.extend(self._stop_managers(self.agent_managers, "agents"))
-        self.log.info("(11.1)==Downgrade RPMs to 2.0.3.")
+        self.log.info("(11.1)==Downgrade RPMs to %s", self.old_version)
         self.downgrade(hosts_server, hosts_client)
         self.log.info("==sleeping 30 more seconds")
         time.sleep(30)
 
         # (12)Cleanup restart server and agent
-        self.log.info("(12)==Restart 2.0 servers and agent.")
+        self.log.info("(12)==Restart %s servers and agent.", self.old_version)
         self.restart_servers()
         self._start_manager_list("agent", self.agent_managers)
         self.show_daos_version(all_hosts, hosts_client)

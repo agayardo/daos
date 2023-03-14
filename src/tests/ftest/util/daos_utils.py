@@ -851,7 +851,7 @@ class DaosCommand(DaosCommandBase):
                 information, e.g. exit status, stdout, stderr, etc.
 
         Raises:
-            CommandFailure: if the dmg storage query command fails.
+            CommandFailure: if the command fails.
 
         """
         return self._get_result(["version"])
