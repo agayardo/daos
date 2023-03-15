@@ -368,7 +368,7 @@ jobs:
                 ls -l /scratch/Get\ a\ cluster/"${{ env.CLUSTER_REQUEST_UUID }}";
              fi
       - name: Debug - find junit files
-        if: steps.run-test.outcome != 'skipped'
+        if: always() && steps.run-test.outcome != 'skipped'
         run: . ci/gha_functions.sh;
              hostname;
              pwd;
@@ -397,12 +397,13 @@ jobs:
           name: Functional on ${{ matrix.distro_name }} ${{ matrix.distro_with_version }} Test Results (new)
           # yamllint disable-line rule:line-length
           path: Functional on ${{ matrix.distro_name }} ${{ matrix.distro_with_version }}/**/results.xml
-          reporter: java-junit        # Format of test results
+          reporter: java-junit
+          fail-on-error: false  # this step doesn't need to fail; report will register the failure
       - name: Debug Publish artifacts
         if: always()
         run: echo "${{ steps.run-test.outcome }}"
       - name: Publish artifacts
-        if: steps.run-test.outcome != 'skipped'
+        if: always() && steps.run-test.outcome != 'skipped'
         uses: actions/upload-artifact@v3
         with:
           name: Functional on ${{ matrix.distro_name }} ${{ matrix.distro_with_version }} artifacts
