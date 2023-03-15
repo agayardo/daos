@@ -389,7 +389,7 @@ jobs:
           # yamllint disable-line rule:line-length
           junit_files: Functional on ${{ matrix.distro_name }} ${{ matrix.distro_with_version }}/**/results.xml
       - name: Test Report
-        uses: phoenix-actions/test-reporting@v8
+        uses: phoenix-actions/test-reporting@v10
         id: test-report               # Set ID reference for step
         if: steps.run-test.outcome != 'skipped'
         with:
