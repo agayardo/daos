@@ -400,7 +400,7 @@ jobs:
           reporter: java-junit        # Format of test results
       - name: Debug Publish artifacts
         if: always()
-        run: echo "${{ steps.run-test.outcome != 'skipped' }}"
+        run: echo "${{ steps.run-test.outcome }}"
       - name: Publish artifacts
         if: steps.run-test.outcome != 'skipped'
         uses: actions/upload-artifact@v3
