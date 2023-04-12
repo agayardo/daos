@@ -161,7 +161,7 @@ typedef struct daos_event {
 /** Wait for completion event forever */
 #define DAOS_EQ_WAIT            -1
 /** Always return immediately */
-#define DAOS_EQ_NOWAIT          0
+#define DAOS_EQ_NOWAIT          1000
 
 typedef enum {
 	/** Query outstanding completed event */
